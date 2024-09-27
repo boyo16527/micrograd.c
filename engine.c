@@ -6,6 +6,8 @@
 // Our scalar node
 struct Value {
   float data;
+  float grad;
+  char label;
   char op;
   struct Value** children; // Point to an array of Value pointers
   int num_children;
@@ -29,9 +31,11 @@ void add_child(struct Value* self, struct Value* child) {
 struct Value* initialize_value(float data) {
   struct Value* v = malloc(sizeof(struct Value));
   v->data = data;
+  v->label = '\0';
   v->children = malloc(sizeof(struct Value*) * 2); 
   v->op = '\0';
   v->num_children = 0;
+  v->grad = 0.0;
   return v;
 }
 
@@ -51,9 +55,36 @@ struct Value* mul(struct Value* left, struct Value* right) {
   return product;
 }
 
+void set_child_grad(struct Value* parent) {
+  for (int i = 0; i < parent->num_children; i++) {
+    struct Value* child = parent->children[i];
+
+    float local_derivative = 1.0;
+    if (parent->op == '*') {
+      for (int j = 0; j < parent->num_children; j++) {
+        if (j != i) {  
+          local_derivative *= parent->children[j]->data;   
+        } 
+      }
+    }
+    if (parent->op == '+') {
+      local_derivative = 1.0;
+    }
+
+    child->grad += local_derivative * parent->grad;
+    set_child_grad(child);
+  }
+  return;
+}
+
+void backprop(struct Value* root) {
+  root->grad = 1.0;
+  set_child_grad(root);
+}
+
 void add_node_and_edges(struct Value* node, Agraph_t* g) {
-  char node_name[20]; 
-  snprintf(node_name, sizeof(node_name), "%.4f", node->data);
+  char node_name[40]; 
+  snprintf(node_name, sizeof(node_name), "label: %c | data: %.2f | grad: %.2f", node->label, node->data, node->grad);
 
   Agnode_t* gv_node = agnode(g, node_name, 1);
 
@@ -62,16 +93,17 @@ void add_node_and_edges(struct Value* node, Agraph_t* g) {
 
   for (int i = 0; i < node->num_children; i++) {
     add_node_and_edges(node->children[i], g);
-    char child_name[20];
-    snprintf(child_name, sizeof(child_name), "%.4f", node->children[i]->data);
+    char child_name[40];
+    snprintf(child_name, sizeof(child_name), "label: %c | data: %.2f | grad: %.2f", node->children[i]->label, node->children[i]->data, node->children[i]->grad);
 
     Agnode_t* child_gv_node = agnode(g, child_name, 0);
     gv_nodes[num_gv_nodes] = child_gv_node;
     num_gv_nodes++;
   }
 
-  char op_name[3];
-  snprintf(op_name, sizeof(op_name), "%c", node->op);
+  char op_name[20];
+  // want op node to be unique
+  snprintf(op_name, sizeof(op_name), "%c_%p", node->op, (void*)node);
 
   Agnode_t* op_node = agnode(g, op_name, 1);
   agedge(g, gv_node, op_node, NULL, 1);
@@ -98,21 +130,39 @@ void visualize_graph(struct Value* root) {
 }
 
 
+void free_value(struct Value* v) {
+  if (v == NULL) return; 
+
+  for (int i = 0; i < v->num_children; i++){
+    free_value(v->children[i]);
+  }
+
+  free(v->children);
+  free(v);
+}
+
 int main() {
-  struct Value* a = initialize_value(4.0);
-  struct Value* b = initialize_value(2.0);
+  struct Value* a = initialize_value(2.0);
+  a->label = 'a';
+  struct Value* b = initialize_value(-3.0);
+  b->label = 'b';
+  struct Value* c = initialize_value(10.0);
+  c->label = 'c';
+  struct Value* e = mul(a, b);
+  e->label = 'e';
+  struct Value* d = add(e, c);
+  d->label = 'd';
+  struct Value* f = initialize_value(-2.0);
+  f->label = 'f';
 
-  repr(a);
-  repr(b);
+  struct Value* L = mul(d, f);
+  L->label = 'L';
 
-  struct Value* c = add(a, b);
-  repr(c);
-  struct Value* d = initialize_value(-3.0);
-  repr(d);
-  struct Value* L = mul(c, d);
-  repr(L);
+  backprop(L);
 
   visualize_graph(L);
+
+  free_value(L);
 
   return 0;
 }
